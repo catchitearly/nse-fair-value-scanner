@@ -75,6 +75,16 @@ def parse_args():
         help="Limit number of tickers (useful for quick tests). E.g.: --limit 50"
     )
     p.add_argument(
+        "--mcap-min", dest="mcap_min", type=float, default=500,
+        metavar="CRORE",
+        help="Minimum market cap in Rs Crore (default: 500)"
+    )
+    p.add_argument(
+        "--mcap-max", dest="mcap_max", type=float, default=10000,
+        metavar="CRORE",
+        help="Maximum market cap in Rs Crore (default: 10000)"
+    )
+    p.add_argument(
         "--delay", type=float, default=0.4,
         help="Delay in seconds between API calls (default: 0.4)"
     )
@@ -99,6 +109,7 @@ def main():
         logger.info(f"  Fwd window: {args.forward_days} days after scan date")
     else:
         logger.info("  Mode      : LIVE  (using today's data)")
+    logger.info(f"  MCap range: Rs{args.mcap_min} cr  —  Rs{args.mcap_max} cr")
     logger.info("=" * 65)
 
     # ── 1. Build ticker list ──────────────────────────────────────────────────
@@ -113,7 +124,8 @@ def main():
         logger.info(f"Limiting to first {args.limit} tickers")
 
     # ── 2. Fetch data (live or historical) ───────────────────────────────────
-    raw_df = fetch_all_stocks(tickers, scan_date=scan_date, delay=args.delay)
+    raw_df = fetch_all_stocks(tickers, scan_date=scan_date, delay=args.delay,
+                               mcap_min=args.mcap_min, mcap_max=args.mcap_max)
 
     if raw_df.empty:
         logger.error("No stocks matched the market-cap filter. Exiting.")
