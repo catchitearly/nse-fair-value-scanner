@@ -1,0 +1,128 @@
+name: NSE Fair Value Scanner
+
+on:
+  workflow_dispatch:          # ← Manual trigger: click "Run workflow" on GitHub
+    inputs:
+
+      scan_date:
+        description: |
+          📅 SCAN DATE for backtesting (YYYY-MM-DD format).
+          Leave BLANK to use TODAY'S live data.
+          Examples: 2023-01-01 | 2022-06-15 | 2021-04-01
+          Note: yfinance supports ~5 years of history.
+        required: false
+        default: ""
+
+      forward_days:
+        description: |
+          ⏩ FORWARD DAYS — actual return window for backtest accuracy.
+          How many days after scan_date to check real price performance.
+          Only used in backtest mode. Leave as 365 for 1-year return.
+          Examples: 90 | 180 | 365 | 730
+        required: false
+        default: "365"
+
+      limit:
+        description: |
+          🔢 LIMIT — scan only the first N tickers (for quick tests).
+          Leave BLANK to scan all NSE stocks in the market-cap range.
+          Recommended for first test: 50
+        required: false
+        default: ""
+
+      tickers:
+        description: |
+          🎯 SPECIFIC TICKERS — space-separated NSE symbols (no .NS suffix).
+          Leave BLANK to scan all NSE stocks.
+          Example: INFY TCS HCLTECH WIPRO PERSISTENT
+        required: false
+        default: ""
+
+      delay:
+        description: |
+          ⏱ DELAY — seconds between yfinance API calls.
+          Lower = faster but risks rate-limiting. Default 0.5 is safe.
+        required: false
+        default: "0.5"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180      # backtest scans can take longer
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 📦 Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: 📁 Create output directories
+        run: mkdir -p output logs
+
+      - name: 🔍 Build and run scanner command
+        run: |
+          CMD="python scanner.py"
+
+          # scan_date (backtest mode)
+          if [ -n "${{ github.event.inputs.scan_date }}" ]; then
+            CMD="$CMD --scan-date ${{ github.event.inputs.scan_date }}"
+          fi
+
+          # forward_days
+          CMD="$CMD --forward-days ${{ github.event.inputs.forward_days || '365' }}"
+
+          # specific tickers
+          if [ -n "${{ github.event.inputs.tickers }}" ]; then
+            CMD="$CMD --tickers ${{ github.event.inputs.tickers }}"
+          fi
+
+          # limit
+          if [ -n "${{ github.event.inputs.limit }}" ]; then
+            CMD="$CMD --limit ${{ github.event.inputs.limit }}"
+          fi
+
+          # delay
+          CMD="$CMD --delay ${{ github.event.inputs.delay || '0.5' }}"
+
+          # output folder
+          CMD="$CMD --output output"
+
+          echo "Running: $CMD"
+          eval $CMD
+
+      - name: 📊 Upload Excel Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: nse-fair-value-report-${{ github.run_number }}
+          path: output/nse_fair_value_*.xlsx
+          retention-days: 60    # keep backtest results longer
+
+      - name: 📋 Upload Scan Log
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-log-${{ github.run_number }}
+          path: logs/*.log
+          retention-days: 14
+
+      - name: ✅ Summary
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "  SCAN COMPLETE"
+          if [ -n "${{ github.event.inputs.scan_date }}" ]; then
+            echo "  Mode     : BACKTEST (${{ github.event.inputs.scan_date }})"
+            echo "  Fwd days : ${{ github.event.inputs.forward_days || '365' }}"
+          else
+            echo "  Mode     : LIVE (today's data)"
+          fi
+          echo "=========================================="
+          echo ""
+          echo "Download the Excel report from the Artifacts section above."
+          ls -lh output/ 2>/dev/null || echo "No output files found."
