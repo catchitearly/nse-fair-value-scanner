@@ -22,19 +22,35 @@ on:
         required: false
         default: "365"
 
+      marketcap_min:
+        description: |
+          📉 MARKET CAP MIN — minimum market cap in Rs Crore.
+          Default: 500. Change to scan small/large cap ranges.
+          Examples: 100 | 500 | 1000 | 5000
+        required: false
+        default: "500"
+
+      marketcap_max:
+        description: |
+          📈 MARKET CAP MAX — maximum market cap in Rs Crore.
+          Default: 10000. Change to scan small/large cap ranges.
+          Examples: 500 | 2000 | 10000 | 50000 | 100000
+        required: false
+        default: "10000"
+
+      tickers:
+        description: |
+          🎯 SPECIFIC TICKERS — space-separated NSE symbols (no .NS suffix).
+          Leave BLANK to scan all NSE stocks in the market-cap range.
+          Example: INFY TCS HCLTECH WIPRO PERSISTENT
+        required: false
+        default: ""
+
       limit:
         description: |
           🔢 LIMIT — scan only the first N tickers (for quick tests).
           Leave BLANK to scan all NSE stocks in the market-cap range.
           Recommended for first test: 50
-        required: false
-        default: ""
-
-      tickers:
-        description: |
-          🎯 SPECIFIC TICKERS — space-separated NSE symbols (no .NS suffix).
-          Leave BLANK to scan all NSE stocks.
-          Example: INFY TCS HCLTECH WIPRO PERSISTENT
         required: false
         default: ""
 
@@ -78,6 +94,10 @@ jobs:
           # forward_days
           CMD="$CMD --forward-days ${{ github.event.inputs.forward_days || '365' }}"
 
+          # market cap range
+          CMD="$CMD --mcap-min ${{ github.event.inputs.marketcap_min || '500' }}"
+          CMD="$CMD --mcap-max ${{ github.event.inputs.marketcap_max || '10000' }}"
+
           # specific tickers
           if [ -n "${{ github.event.inputs.tickers }}" ]; then
             CMD="$CMD --tickers ${{ github.event.inputs.tickers }}"
@@ -102,7 +122,7 @@ jobs:
         with:
           name: nse-fair-value-report-${{ github.run_number }}
           path: output/nse_fair_value_*.xlsx
-          retention-days: 60    # keep backtest results longer
+          retention-days: 60
 
       - name: 📋 Upload Scan Log
         uses: actions/upload-artifact@v4
@@ -122,6 +142,7 @@ jobs:
           else
             echo "  Mode     : LIVE (today's data)"
           fi
+          echo "  MCap     : Rs ${{ github.event.inputs.marketcap_min || '500' }} cr  to  Rs ${{ github.event.inputs.marketcap_max || '10000' }} cr"
           echo "=========================================="
           echo ""
           echo "Download the Excel report from the Artifacts section above."
