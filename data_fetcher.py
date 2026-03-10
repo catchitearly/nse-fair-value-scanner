@@ -204,7 +204,7 @@ def _growth(df_fin, metric_key, scan_date):
 # SINGLE STOCK FETCH  (live or historical)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def fetch_stock_data(ticker, scan_date=None):
+def fetch_stock_data(ticker, scan_date=None, mcap_min=500, mcap_max=10000):
     """
     Fetches all required valuation parameters for one ticker.
 
@@ -239,7 +239,7 @@ def fetch_stock_data(ticker, scan_date=None):
             market_cap_inr = info.get("marketCap", 0) or 0
 
         market_cap_cr = market_cap_inr / CR_TO_INR
-        if not (MARKET_CAP_MIN_CR <= market_cap_cr <= MARKET_CAP_MAX_CR):
+        if not (mcap_min <= market_cap_cr <= mcap_max):
             return None
 
         # ── FINANCIALS ────────────────────────────────────────────────────────
@@ -452,17 +452,17 @@ def enrich_with_forward_price(df, scan_date, forward_days=365):
 # BATCH FETCH
 # ══════════════════════════════════════════════════════════════════════════════
 
-def fetch_all_stocks(tickers, scan_date=None, delay=0.4):
+def fetch_all_stocks(tickers, scan_date=None, delay=0.4, mcap_min=500, mcap_max=10000):
     """
     Iterates over all tickers, fetches data (live or historical),
     and filters by reconstructed market cap at scan_date.
     """
     results = []
     mode    = f"BACKTEST ({scan_date})" if scan_date else "LIVE (today)"
-    logger.info(f"Scanning {len(tickers)} tickers | Mode: {mode} | MCap filter: Rs{MARKET_CAP_MIN_CR}-{MARKET_CAP_MAX_CR} cr")
+    logger.info(f"Scanning {len(tickers)} tickers | Mode: {mode} | MCap filter: Rs{mcap_min}-{mcap_max} cr")
 
     for ticker in tqdm(tickers, desc="Fetching", unit="stock"):
-        data = fetch_stock_data(ticker, scan_date=scan_date)
+        data = fetch_stock_data(ticker, scan_date=scan_date, mcap_min=mcap_min, mcap_max=mcap_max)
         if data:
             results.append(data)
         time.sleep(delay)
