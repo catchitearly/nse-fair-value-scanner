@@ -34,6 +34,41 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CURL_CFFI SESSION SETUP — bypasses Yahoo Finance bot detection in CI
+# ══════════════════════════════════════════════════════════════════════════════
+
+def setup_yfinance_session():
+    """
+    Configures yfinance to use curl_cffi with Chrome impersonation.
+    This bypasses Yahoo Finance's TLS fingerprint bot-detection that blocks
+    GitHub Actions (and other CI) IP ranges.
+
+    curl_cffi must be installed: pip install curl_cffi>=0.7.0
+    yfinance>=0.2.54 picks it up automatically when present.
+
+    Call once at startup before any yf.Ticker() calls.
+    """
+    try:
+        from curl_cffi import requests as cffi_requests
+        session = cffi_requests.Session(impersonate="chrome")
+        yf.set_tz_cache_location("/tmp/yf_tz_cache")
+        # Monkey-patch yfinance's default session
+        import yfinance.utils as yf_utils
+        yf_utils.requests = cffi_requests
+        logger.info("curl_cffi session active — Chrome impersonation enabled")
+        return session
+    except ImportError:
+        logger.warning(
+            "curl_cffi not installed — yfinance will use default requests session.\n"
+            "  If you get rate-limit errors, install it: pip install curl_cffi>=0.7.0"
+        )
+        return None
+    except Exception as e:
+        logger.warning(f"curl_cffi setup failed ({e}) — falling back to default session")
+        return None
+
 CR_TO_INR        = 1e7
 TODAY            = date.today()
 RETURN_INTERVALS = [30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330, 365]
