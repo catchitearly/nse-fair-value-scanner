@@ -212,7 +212,7 @@ def _get_fast_info(tk):
         result["week52_low"] = _safe_float(getattr(fi, "year_low",         None))
         result["currency"]   = getattr(fi, "currency", "INR")
     except Exception as e:
-        logger.info(f"  fast_info error for {ticker if "ticker" in dir() else "?"}: {e}")
+        logger.info(f"  fast_info error for {ticker}: {e}")
     return result
 
 
