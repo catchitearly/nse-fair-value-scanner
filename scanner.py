@@ -26,7 +26,8 @@ from datetime import datetime
 from data_fetcher import (
     load_tickers_from_csv, fetch_all_stocks,
     parse_scan_date, enrich_with_monthly_returns,
-    check_results_season, RETURN_INTERVALS
+    check_results_season, RETURN_INTERVALS,
+    setup_yfinance_session,
 )
 from valuation_engine import run_valuation
 from report_generator import generate_report
@@ -112,6 +113,9 @@ def main():
     scan_date   = parse_scan_date(args.scan_date)
     is_backtest = scan_date is not None
     workers     = max(1, args.workers)
+
+    # ── Setup yfinance session (curl_cffi Chrome impersonation) ─────────────
+    setup_yfinance_session()
 
     # ── Header ────────────────────────────────────────────────────────────────
     logger.info("=" * 65)
