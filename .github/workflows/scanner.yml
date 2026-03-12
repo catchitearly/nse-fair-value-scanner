@@ -16,8 +16,8 @@ on:
       workers:
         description: |
           ⚡ WORKERS — parallel fetch threads.
-          1 = sequential, safest (use if getting "No data fetched" errors)
-          2 = ~2x faster (default)
+          1 = sequential, safest (default)
+          2 = ~2x faster
           4 = ~4x faster (recommended max)
         required: false
         default: "1"
@@ -25,24 +25,23 @@ on:
       csv_file:
         description: |
           📄 CSV FILE — path to your stock list in the repo.
-          Default: stocks.csv
-          Must have columns: Stock Name | Symbol
+          Default: stocks.csv (must have: Stock Name | Symbol columns)
         required: false
         default: "stocks.csv"
 
       limit:
         description: |
           🔢 LIMIT — scan only first N rows (for quick tests).
-          Leave BLANK to scan all stocks. Try 5 for your first run.
+          Leave BLANK for full scan. Use 5 for your first test run.
         required: false
         default: ""
 
       delay:
         description: |
-          ⏱ DELAY — seconds between API calls (default 1.0).
-          Increase to 2.0 if you keep getting "No data" errors.
+          ⏱ DELAY — seconds between API calls (default 1.5).
+          Increase to 3.0 if you get rate-limit errors.
         required: false
-        default: "1.0"
+        default: "1.5"
 
 jobs:
   scan:
@@ -60,7 +59,12 @@ jobs:
           cache: pip
 
       - name: 📦 Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          # curl_cffi enables Chrome TLS impersonation to bypass Yahoo Finance
+          # bot-detection that blocks GitHub Actions IP ranges
+          pip install "curl_cffi>=0.7.0"
+          echo "curl_cffi version: $(python3 -c 'import curl_cffi; print(curl_cffi.__version__)')"
 
       - name: 📁 Create directories
         run: mkdir -p output logs
@@ -69,48 +73,74 @@ jobs:
         run: |
           CSV="${{ github.event.inputs.csv_file || 'stocks.csv' }}"
           if [ -f "$CSV" ]; then
-            echo "✅ Found $CSV"
-            echo "Total rows: $(tail -n +2 $CSV | wc -l)"
+            echo "✅ Found: $CSV"
+            echo "Total rows: $(tail -n +2 "$CSV" | wc -l)"
             echo "--- First 5 rows ---"
             head -6 "$CSV"
           else
-            echo "❌ ERROR: $CSV not found!"
+            echo "❌ ERROR: $CSV not found in repo!"
             exit 1
           fi
 
       - name: 🔌 Connectivity diagnostic
         run: |
           python3 - << 'EOF'
-          import yfinance as yf, sys
+          import yfinance as yf, sys, time
+
+          # Enable Chrome impersonation before any requests
+          try:
+              from curl_cffi import requests as cffi_requests
+              session = cffi_requests.Session(impersonate="chrome")
+              import yfinance.utils as yf_utils
+              yf_utils.requests = cffi_requests
+              print("✅ curl_cffi Chrome impersonation active")
+          except Exception as e:
+              print(f"⚠️  curl_cffi setup: {e}")
+
           print(f"yfinance version: {yf.__version__}")
-          test_tickers = ["INFY.NS", "TCS.NS", "RELIANCE.NS"]
+          print("Testing connectivity on 3 tickers ...")
+
           ok = 0
-          for t in test_tickers:
+          for t in ["INFY.NS", "TCS.NS", "RELIANCE.NS"]:
               try:
                   tk = yf.Ticker(t)
-                  fi = tk.fast_info
-                  price = getattr(fi, "last_price", None)
-                  if price and float(price) > 0:
-                      print(f"  ✅ {t}: last_price = {price:.2f}")
-                      ok += 1
-                  else:
+                  # Try fast_info first
+                  price = None
+                  try:
+                      fi = tk.fast_info
+                      price = getattr(fi, "last_price", None)
+                      if price: price = float(price)
+                  except Exception:
+                      pass
+
+                  # Fallback to history
+                  if not price or price <= 0:
                       hist = tk.history(period="3d", auto_adjust=True)
                       if not hist.empty:
-                          print(f"  ✅ {t}: history close = {hist['Close'].iloc[-1]:.2f}")
-                          ok += 1
-                      else:
-                          print(f"  ⚠️  {t}: no price from fast_info or history")
+                          price = float(hist["Close"].iloc[-1])
+
+                  if price and price > 0:
+                      print(f"  ✅ {t}: {price:.2f}")
+                      ok += 1
+                  else:
+                      print(f"  ⚠️  {t}: returned no price data")
+
+                  time.sleep(1.0)
+
               except Exception as e:
                   print(f"  ❌ {t}: {e}")
-          if ok == 0:
-              print("\n❌ FATAL: Cannot fetch any price data from yfinance.")
-              print("   Possible causes:")
-              print("   1. yfinance rate-limited — wait 5 minutes and re-run")
-              print("   2. GitHub Actions IP blocked by Yahoo Finance temporarily")
-              print("   3. Network issue in this runner")
-              sys.exit(1)
+                  time.sleep(2.0)
+
+          print()
+          if ok > 0:
+              print(f"✅ Connectivity OK — {ok}/3 tickers responded. Proceeding with scan.")
           else:
-              print(f"\n✅ Connectivity OK ({ok}/{len(test_tickers)} tickers responded)")
+              print("❌ WARNING: All test tickers failed.")
+              print("   This likely means GitHub Actions IP is temporarily rate-limited.")
+              print("   Options:")
+              print("   1. Wait 5-10 minutes and re-run this workflow")
+              print("   2. Increase delay to 3.0+ in workflow inputs")
+              print("   Continuing anyway — the main scan has per-stock retry logic.")
           EOF
 
       - name: 🔍 Run NSE Fair Value Scanner
@@ -123,7 +153,7 @@ jobs:
           fi
 
           CMD="$CMD --workers ${{ github.event.inputs.workers || '1' }}"
-          CMD="$CMD --delay ${{ github.event.inputs.delay || '1.0' }}"
+          CMD="$CMD --delay ${{ github.event.inputs.delay || '1.5' }}"
 
           if [ -n "${{ github.event.inputs.limit }}" ]; then
             CMD="$CMD --limit ${{ github.event.inputs.limit }}"
@@ -165,6 +195,6 @@ jobs:
           fi
           echo "CSV     : ${{ github.event.inputs.csv_file || 'stocks.csv' }}"
           echo "Workers : ${{ github.event.inputs.workers || '1' }}"
-          echo "Delay   : ${{ github.event.inputs.delay || '1.0' }}s"
+          echo "Delay   : ${{ github.event.inputs.delay || '1.5' }}s"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          ls -lh output/ 2>/dev/null || echo "No output files generated"
+          ls -lh output/ 2>/dev/null || echo "No output files"
