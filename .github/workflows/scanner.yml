@@ -9,43 +9,40 @@ on:
           📅 SCAN DATE — backtest date (YYYY-MM-DD).
           Leave BLANK for today's live data.
           ⚠️  AVOID grey zones: Oct 1-14 | Jan 1-14 | Apr 1-14 | Jul 1-14
-          ✅  SAFE dates: Nov 15-Dec 31 | Feb 15-Mar 31 | May 15-Jun 30 | Aug 15-Sep 30
+          ✅  SAFE dates: Nov15-Dec31 | Feb15-Mar31 | May15-Jun30 | Aug15-Sep30
         required: false
         default: ""
 
       workers:
         description: |
           ⚡ WORKERS — parallel fetch threads.
-          1 = sequential, safest
+          1 = sequential, safest (use if getting "No data fetched" errors)
           2 = ~2x faster (default)
           4 = ~4x faster (recommended max)
-          8 = fastest, risk of yfinance rate-limit
         required: false
-        default: "2"
+        default: "1"
 
       csv_file:
         description: |
-          📄 CSV FILE — path to your stock universe CSV in the repo.
-          Default: stocks.csv (repo root)
-          Must have a 'ticker' column. Optional: name, notes, sector.
-          Example: data/my_watchlist.csv
+          📄 CSV FILE — path to your stock list in the repo.
+          Default: stocks.csv
+          Must have columns: Stock Name | Symbol
         required: false
         default: "stocks.csv"
 
       limit:
         description: |
-          🔢 LIMIT — scan only first N rows of the CSV (for quick tests).
-          Leave BLANK to scan all stocks in the CSV.
-          Example: 10
+          🔢 LIMIT — scan only first N rows (for quick tests).
+          Leave BLANK to scan all stocks. Try 5 for your first run.
         required: false
         default: ""
 
       delay:
         description: |
-          ⏱ DELAY — seconds between API calls (default 0.5).
-          Lower to 0.2 when using workers >= 4.
+          ⏱ DELAY — seconds between API calls (default 1.0).
+          Increase to 2.0 if you keep getting "No data" errors.
         required: false
-        default: "0.5"
+        default: "1.0"
 
 jobs:
   scan:
@@ -71,15 +68,50 @@ jobs:
       - name: 📋 Show stock universe
         run: |
           CSV="${{ github.event.inputs.csv_file || 'stocks.csv' }}"
-          echo "Stock universe: $CSV"
           if [ -f "$CSV" ]; then
-            echo "Total stocks: $(tail -n +2 $CSV | wc -l)"
-            echo "First 5 tickers:"
+            echo "✅ Found $CSV"
+            echo "Total rows: $(tail -n +2 $CSV | wc -l)"
+            echo "--- First 5 rows ---"
             head -6 "$CSV"
           else
-            echo "ERROR: $CSV not found in repo!"
+            echo "❌ ERROR: $CSV not found!"
             exit 1
           fi
+
+      - name: 🔌 Connectivity diagnostic
+        run: |
+          python3 - << 'EOF'
+          import yfinance as yf, sys
+          print(f"yfinance version: {yf.__version__}")
+          test_tickers = ["INFY.NS", "TCS.NS", "RELIANCE.NS"]
+          ok = 0
+          for t in test_tickers:
+              try:
+                  tk = yf.Ticker(t)
+                  fi = tk.fast_info
+                  price = getattr(fi, "last_price", None)
+                  if price and float(price) > 0:
+                      print(f"  ✅ {t}: last_price = {price:.2f}")
+                      ok += 1
+                  else:
+                      hist = tk.history(period="3d", auto_adjust=True)
+                      if not hist.empty:
+                          print(f"  ✅ {t}: history close = {hist['Close'].iloc[-1]:.2f}")
+                          ok += 1
+                      else:
+                          print(f"  ⚠️  {t}: no price from fast_info or history")
+              except Exception as e:
+                  print(f"  ❌ {t}: {e}")
+          if ok == 0:
+              print("\n❌ FATAL: Cannot fetch any price data from yfinance.")
+              print("   Possible causes:")
+              print("   1. yfinance rate-limited — wait 5 minutes and re-run")
+              print("   2. GitHub Actions IP blocked by Yahoo Finance temporarily")
+              print("   3. Network issue in this runner")
+              sys.exit(1)
+          else:
+              print(f"\n✅ Connectivity OK ({ok}/{len(test_tickers)} tickers responded)")
+          EOF
 
       - name: 🔍 Run NSE Fair Value Scanner
         run: |
@@ -90,8 +122,8 @@ jobs:
             CMD="$CMD --scan-date ${{ github.event.inputs.scan_date }}"
           fi
 
-          CMD="$CMD --workers ${{ github.event.inputs.workers || '2' }}"
-          CMD="$CMD --delay ${{ github.event.inputs.delay || '0.5' }}"
+          CMD="$CMD --workers ${{ github.event.inputs.workers || '1' }}"
+          CMD="$CMD --delay ${{ github.event.inputs.delay || '1.0' }}"
 
           if [ -n "${{ github.event.inputs.limit }}" ]; then
             CMD="$CMD --limit ${{ github.event.inputs.limit }}"
@@ -100,35 +132,39 @@ jobs:
           CMD="$CMD --output output"
 
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  Running: $CMD"
+          echo "Running: $CMD"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           eval $CMD
 
       - name: 📊 Upload Excel Report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nse-fair-value-report-${{ github.run_number }}
           path: output/nse_fair_value_*.xlsx
           retention-days: 60
+          if-no-files-found: warn
 
       - name: 📋 Upload Scan Log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: scan-log-${{ github.run_number }}
           path: logs/*.log
           retention-days: 14
+          if-no-files-found: warn
 
       - name: ✅ Summary
+        if: always()
         run: |
-          echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  SCAN COMPLETE"
           if [ -n "${{ github.event.inputs.scan_date }}" ]; then
-            echo "  Mode    : BACKTEST  (${{ github.event.inputs.scan_date }})"
+            echo "Mode    : BACKTEST (${{ github.event.inputs.scan_date }})"
           else
-            echo "  Mode    : LIVE (today)"
+            echo "Mode    : LIVE"
           fi
-          echo "  CSV     : ${{ github.event.inputs.csv_file || 'stocks.csv' }}"
-          echo "  Workers : ${{ github.event.inputs.workers || '2' }}"
+          echo "CSV     : ${{ github.event.inputs.csv_file || 'stocks.csv' }}"
+          echo "Workers : ${{ github.event.inputs.workers || '1' }}"
+          echo "Delay   : ${{ github.event.inputs.delay || '1.0' }}s"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          ls -lh output/
+          ls -lh output/ 2>/dev/null || echo "No output files generated"
