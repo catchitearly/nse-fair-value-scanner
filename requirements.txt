@@ -1,4 +1,8 @@
-yfinance==0.2.54
+# curl_cffi: impersonates Chrome TLS fingerprint — bypasses Yahoo Finance
+# bot-detection that blocks GitHub Actions IP ranges.
+# yfinance uses it automatically when installed (via yf.Ticker session).
+curl_cffi>=0.7.0
+yfinance>=0.2.54
 pandas==2.2.3
 numpy==1.26.4
 requests==2.32.3
