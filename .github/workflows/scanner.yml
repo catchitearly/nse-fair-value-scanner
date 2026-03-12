@@ -8,55 +8,42 @@ on:
         description: |
           📅 SCAN DATE — backtest date (YYYY-MM-DD).
           Leave BLANK for today's live data.
-          AVOID grey zones: Oct 1-14, Jan 1-14, Apr 1-14, Jul 1-14
-          (quarterly results still filing — mixed financial data)
-          Safe dates: Nov 15-Dec 31 | Feb 15-Mar 31 | May 15-Jun 30 | Aug 15-Sep 30
+          ⚠️  AVOID grey zones: Oct 1-14 | Jan 1-14 | Apr 1-14 | Jul 1-14
+          ✅  SAFE dates: Nov 15-Dec 31 | Feb 15-Mar 31 | May 15-Jun 30 | Aug 15-Sep 30
         required: false
         default: ""
 
       workers:
         description: |
-          ⚡ WORKERS — parallel fetch threads (faster scan).
-          1 = sequential, safest (default)
-          2 = ~2x faster
+          ⚡ WORKERS — parallel fetch threads.
+          1 = sequential, safest
+          2 = ~2x faster (default)
           4 = ~4x faster (recommended max)
           8 = fastest, risk of yfinance rate-limit
         required: false
         default: "2"
 
-      marketcap_min:
+      csv_file:
         description: |
-          📉 MARKET CAP MIN — minimum in Rs Crore (default 500).
-          Examples: 100 | 500 | 1000 | 5000
+          📄 CSV FILE — path to your stock universe CSV in the repo.
+          Default: stocks.csv (repo root)
+          Must have a 'ticker' column. Optional: name, notes, sector.
+          Example: data/my_watchlist.csv
         required: false
-        default: "500"
-
-      marketcap_max:
-        description: |
-          📈 MARKET CAP MAX — maximum in Rs Crore (default 10000).
-          Examples: 2000 | 7000 | 10000 | 50000
-        required: false
-        default: "10000"
-
-      tickers:
-        description: |
-          🎯 SPECIFIC TICKERS — space-separated (no .NS suffix).
-          Leave BLANK to scan all NSE stocks in the market-cap range.
-          Example: INFY TCS HCLTECH WIPRO PERSISTENT
-        required: false
-        default: ""
+        default: "stocks.csv"
 
       limit:
         description: |
-          🔢 LIMIT — scan only first N tickers (for quick tests).
-          Leave BLANK for full scan. Try 50 for your first test run.
+          🔢 LIMIT — scan only first N rows of the CSV (for quick tests).
+          Leave BLANK to scan all stocks in the CSV.
+          Example: 10
         required: false
         default: ""
 
       delay:
         description: |
           ⏱ DELAY — seconds between API calls (default 0.5).
-          Reduce to 0.2 when using workers >= 4.
+          Lower to 0.2 when using workers >= 4.
         required: false
         default: "0.5"
 
@@ -81,22 +68,30 @@ jobs:
       - name: 📁 Create directories
         run: mkdir -p output logs
 
+      - name: 📋 Show stock universe
+        run: |
+          CSV="${{ github.event.inputs.csv_file || 'stocks.csv' }}"
+          echo "Stock universe: $CSV"
+          if [ -f "$CSV" ]; then
+            echo "Total stocks: $(tail -n +2 $CSV | wc -l)"
+            echo "First 5 tickers:"
+            head -6 "$CSV"
+          else
+            echo "ERROR: $CSV not found in repo!"
+            exit 1
+          fi
+
       - name: 🔍 Run NSE Fair Value Scanner
         run: |
           CMD="python scanner.py"
+          CMD="$CMD --csv ${{ github.event.inputs.csv_file || 'stocks.csv' }}"
 
           if [ -n "${{ github.event.inputs.scan_date }}" ]; then
             CMD="$CMD --scan-date ${{ github.event.inputs.scan_date }}"
           fi
 
           CMD="$CMD --workers ${{ github.event.inputs.workers || '2' }}"
-          CMD="$CMD --mcap-min ${{ github.event.inputs.marketcap_min || '500' }}"
-          CMD="$CMD --mcap-max ${{ github.event.inputs.marketcap_max || '10000' }}"
           CMD="$CMD --delay ${{ github.event.inputs.delay || '0.5' }}"
-
-          if [ -n "${{ github.event.inputs.tickers }}" ]; then
-            CMD="$CMD --tickers ${{ github.event.inputs.tickers }}"
-          fi
 
           if [ -n "${{ github.event.inputs.limit }}" ]; then
             CMD="$CMD --limit ${{ github.event.inputs.limit }}"
@@ -104,9 +99,9 @@ jobs:
 
           CMD="$CMD --output output"
 
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "  Running: $CMD"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           eval $CMD
 
       - name: 📊 Upload Excel Report
@@ -126,16 +121,14 @@ jobs:
       - name: ✅ Summary
         run: |
           echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "  SCAN COMPLETE"
           if [ -n "${{ github.event.inputs.scan_date }}" ]; then
             echo "  Mode    : BACKTEST  (${{ github.event.inputs.scan_date }})"
           else
             echo "  Mode    : LIVE (today)"
           fi
-          echo "  MCap    : Rs ${{ github.event.inputs.marketcap_min || '500' }} cr  to  Rs ${{ github.event.inputs.marketcap_max || '10000' }} cr"
+          echo "  CSV     : ${{ github.event.inputs.csv_file || 'stocks.csv' }}"
           echo "  Workers : ${{ github.event.inputs.workers || '2' }}"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "  Download the Excel report from Artifacts above."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           ls -lh output/
