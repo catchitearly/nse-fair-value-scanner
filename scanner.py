@@ -1,38 +1,30 @@
 """
 scanner.py
 -----------
-NSE Fair Value Scanner — main entry point.
+NSE Fair Value Scanner — reads stock universe from stocks.csv.
 
-LIVE SCAN:
-    python scanner.py
+USAGE:
+    python scanner.py                            # live scan, all stocks in stocks.csv
+    python scanner.py --scan-date 2023-06-01     # backtest as of that date
+    python scanner.py --workers 4                # 4x faster parallel fetch
+    python scanner.py --limit 20                 # first 20 rows of stocks.csv (quick test)
+    python scanner.py --csv my_stocks.csv        # use a different CSV file
 
-BACKTEST with monthly returns:
-    python scanner.py --scan-date 2023-01-01
-    python scanner.py --scan-date 2022-06-15
-
-PARALLEL (faster):
-    python scanner.py --workers 4
-    python scanner.py --scan-date 2023-01-01 --workers 4
-
-ALL OPTIONS:
-    --scan-date   YYYY-MM-DD   Backtest date (blank = live)
-    --workers     N            Parallel workers (default 1, max recommended 4)
-    --mcap-min    N            Min market cap in Rs Crore (default 500)
-    --mcap-max    N            Max market cap in Rs Crore (default 10000)
-    --tickers     A B C        Specific NSE tickers (no .NS suffix)
-    --limit       N            First N tickers only (for quick tests)
-    --delay       N            Seconds between API calls (default 0.4)
-    --output      DIR          Output folder (default output/)
+stocks.csv format:
+    ticker,name,notes
+    INFY,Infosys,IT services
+    TCS,Tata Consultancy Services,IT services
+    (place this file in the same folder as scanner.py)
 """
 
 import argparse
 import logging
 import os
 import sys
-from datetime import datetime, date
+from datetime import datetime
 
 from data_fetcher import (
-    get_nse_stock_list, fetch_all_stocks,
+    load_tickers_from_csv, fetch_all_stocks,
     parse_scan_date, enrich_with_monthly_returns,
     check_results_season, RETURN_INTERVALS
 )
@@ -56,13 +48,22 @@ logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ARGUMENT PARSER
+# ARGUMENTS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="NSE Fair Value Scanner",
+        description="NSE Fair Value Scanner — stock universe from stocks.csv",
         formatter_class=argparse.RawTextHelpFormatter
+    )
+    p.add_argument(
+        "--csv", type=str, default="stocks.csv", metavar="FILE",
+        help=(
+            "Path to your stock universe CSV file.\n"
+            "  Default: stocks.csv (in the same folder as scanner.py)\n"
+            "  Must have a 'ticker' column. Optional: name, notes, sector.\n"
+            "  Example: --csv my_watchlist.csv"
+        )
     )
     p.add_argument(
         "--scan-date", dest="scan_date", type=str, default=None,
@@ -70,47 +71,34 @@ def parse_args():
         help=(
             "Backtest date — scan AS OF this date.\n"
             "  Leave blank for TODAY's live data.\n"
-            "  Example: --scan-date 2023-01-01\n"
-            "  Tip: Avoid results-season grey zones (Oct 1-14, Jan 1-14,\n"
-            "       Apr 1-14, Jul 1-14) for cleaner backtest data."
+            "  Example: --scan-date 2023-06-01\n"
+            "  Safe zones: Nov15-Dec31 | Feb15-Mar31 | May15-Jun30 | Aug15-Sep30"
         )
     )
     p.add_argument(
         "--workers", type=int, default=1, metavar="N",
         help=(
-            "Parallel workers for faster fetching.\n"
-            "  1  = sequential, safest (default)\n"
-            "  2  = 2x faster\n"
-            "  4  = 4x faster (recommended max)\n"
-            "  8  = fastest but risk of yfinance rate-limit\n"
-            "  Example: --workers 4"
+            "Parallel fetch workers (faster).\n"
+            "  1 = sequential, safest (default)\n"
+            "  2 = ~2x faster\n"
+            "  4 = ~4x faster (recommended max)\n"
+            "  8 = fastest, risk of yfinance rate-limit"
         )
     )
     p.add_argument(
-        "--mcap-min", dest="mcap_min", type=float, default=500,
-        metavar="CRORE",
-        help="Min market cap in Rs Crore (default: 500)"
+        "--limit", type=int, default=None, metavar="N",
+        help=(
+            "Scan only first N rows of the CSV.\n"
+            "  Useful for quick tests. E.g.: --limit 10"
+        )
     )
     p.add_argument(
-        "--mcap-max", dest="mcap_max", type=float, default=10000,
-        metavar="CRORE",
-        help="Max market cap in Rs Crore (default: 10000)"
+        "--delay", type=float, default=0.4, metavar="SEC",
+        help="Seconds between API calls (default: 0.4)"
     )
     p.add_argument(
-        "--tickers", nargs="+", metavar="TICKER",
-        help="Specific NSE tickers (no .NS). E.g.: --tickers INFY TCS WIPRO"
-    )
-    p.add_argument(
-        "--limit", type=int, default=None,
-        help="First N tickers only. E.g.: --limit 50  (good for quick tests)"
-    )
-    p.add_argument(
-        "--delay", type=float, default=0.4,
-        help="Seconds between API calls (default 0.4). Reduce with more workers."
-    )
-    p.add_argument(
-        "--output", type=str, default="output",
-        help="Output directory (default: output/)"
+        "--output", type=str, default="output", metavar="DIR",
+        help="Output folder for Excel report (default: output/)"
     )
     return p.parse_args()
 
@@ -130,7 +118,7 @@ def main():
     logger.info("  NSE FAIR VALUE SCANNER")
     logger.info(f"  Run time  : {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
     logger.info(f"  Mode      : {'BACKTEST  (scan date: ' + str(scan_date) + ')' if is_backtest else 'LIVE (today)'}")
-    logger.info(f"  MCap range: Rs{args.mcap_min:,.0f} cr  to  Rs{args.mcap_max:,.0f} cr")
+    logger.info(f"  Stock CSV : {args.csv}")
     logger.info(f"  Workers   : {workers} ({'parallel' if workers > 1 else 'sequential'})")
     logger.info("=" * 65)
 
@@ -139,55 +127,58 @@ def main():
         is_grey, warning_msg = check_results_season(scan_date)
         if is_grey:
             logger.warning(warning_msg)
-            # Don't exit — user may want to proceed anyway
 
-    # ── 1. Ticker list ────────────────────────────────────────────────────────
-    if args.tickers:
-        tickers = [t.upper() + ".NS" for t in args.tickers]
-        logger.info(f"Custom tickers: {tickers}")
-    else:
-        tickers = get_nse_stock_list()
+    # ── 1. Load stock universe from CSV ───────────────────────────────────────
+    tickers, meta_df = load_tickers_from_csv(args.csv)
+
+    if not tickers:
+        logger.error(
+            f"No tickers loaded from '{args.csv}'. Cannot proceed.\n"
+            f"  Make sure the file exists and has a 'ticker' column."
+        )
+        sys.exit(1)
 
     if args.limit:
-        tickers = tickers[:args.limit]
-        logger.info(f"Limiting to first {args.limit} tickers")
+        tickers  = tickers[:args.limit]
+        meta_df  = meta_df.head(args.limit)
+        logger.info(f"Limiting to first {args.limit} stocks from CSV")
 
-    # ── 2. Fetch financial data ───────────────────────────────────────────────
+    logger.info(f"Stock universe: {len(tickers)} stocks")
+
+    # ── 2. Fetch data ─────────────────────────────────────────────────────────
     raw_df = fetch_all_stocks(
         tickers,
-        scan_date = scan_date,
-        delay     = args.delay,
-        mcap_min  = args.mcap_min,
-        mcap_max  = args.mcap_max,
-        workers   = workers,
+        scan_date   = scan_date,
+        delay       = args.delay,
+        workers     = workers,
+        csv_meta_df = meta_df,
     )
 
     if raw_df.empty:
         logger.error(
-            "No stocks matched the market-cap filter or had sufficient yfinance data.\n"
+            "No data fetched for any stock.\n"
             "  Possible reasons:\n"
-            "    1. --limit is too small and all first-N tickers are SME/obscure stocks\n"
-            "       with no yfinance data. Try --limit 100 or remove --limit entirely.\n"
-            "    2. Market cap range is too narrow. Check --mcap-min / --mcap-max.\n"
-            "    3. yfinance is rate-limiting. Wait a few minutes and retry.\n"
-            "  Tip: Run with --tickers INFY TCS HCLTECH first to verify connectivity."
+            "    1. yfinance is rate-limiting — wait a few minutes and retry.\n"
+            "    2. Tickers in your CSV are invalid or not on NSE.\n"
+            "    3. No internet connectivity.\n"
+            "  Tip: Test with --limit 5 --workers 1 first."
         )
         sys.exit(1)
 
-    logger.info(f"Stocks passing market-cap filter: {len(raw_df)}")
+    logger.info(f"Data fetched for {len(raw_df)} / {len(tickers)} stocks")
 
-    # ── 3. Valuation models ───────────────────────────────────────────────────
+    # ── 3. Valuation ──────────────────────────────────────────────────────────
     result_df = run_valuation(raw_df)
 
-    # ── 4. Monthly return enrichment (backtest only) ──────────────────────────
+    # ── 4. Monthly returns (backtest only) ────────────────────────────────────
     if is_backtest:
-        logger.info("Fetching monthly price snapshots for return calculation ...")
+        logger.info("Fetching monthly price snapshots for return analysis ...")
         result_df = enrich_with_monthly_returns(
             result_df, scan_date, workers=workers
         )
         _print_backtest_accuracy(result_df, scan_date)
 
-    # ── 5. Generate report ────────────────────────────────────────────────────
+    # ── 5. Report ─────────────────────────────────────────────────────────────
     excel_path = generate_report(
         result_df,
         output_dir  = args.output,
@@ -195,47 +186,40 @@ def main():
         is_backtest = is_backtest,
     )
 
-    # ── 6. Final summary ──────────────────────────────────────────────────────
+    # ── 6. Summary ────────────────────────────────────────────────────────────
     logger.info("\n" + "─" * 65)
     logger.info("  SCAN COMPLETE")
     for v in ["Strong Buy", "Buy", "Hold", "Avoid", "Strong Avoid", "Insufficient Data"]:
         matches = result_df[result_df["verdict"].str.contains(v, na=False)]
         if len(matches):
             logger.info(f"  {v:22s}: {len(matches)} stocks")
-    logger.info(f"\n  Excel report -> {excel_path}")
+    logger.info(f"\n  Excel report → {excel_path}")
     logger.info("─" * 65)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BACKTEST ACCURACY CONSOLE SUMMARY
+# BACKTEST ACCURACY CONSOLE PRINT
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _print_backtest_accuracy(df, scan_date):
-    """
-    Prints a monthly return table for each verdict category.
-    Shows return at 30,60,90,...,365 days for Strong Buy vs Buy vs Hold etc.
-    """
-    # Only show intervals that have data
-    available = [d for d in RETURN_INTERVALS if f"return_{d}d" in df.columns
-                 and df[f"return_{d}d"].notna().any()]
-
+    available = [
+        d for d in RETURN_INTERVALS
+        if f"return_{d}d" in df.columns and df[f"return_{d}d"].notna().any()
+    ]
     if not available:
-        logger.info("No forward return data available yet (future dates).")
+        logger.info("No forward return data available (all intervals in future).")
         return
 
     verdicts = ["Strong Buy", "Buy", "Hold", "Avoid", "Strong Avoid"]
 
     logger.info("\n" + "═" * 90)
     logger.info(f"  BACKTEST ACCURACY  |  Scan date: {scan_date}")
-    logger.info(f"  Average return % by verdict at each time interval")
+    logger.info("  Average return % by verdict at each time interval")
     logger.info("═" * 90)
 
-    # Header row
-    header = f"  {'Verdict':<20} {'N':>4}"
-    for d in available:
-        header += f"  {'+'+str(d)+'d':>7}"
-    logger.info(header)
-    logger.info("  " + "─" * (24 + len(available) * 9))
+    hdr = f"  {'Verdict':<20} {'N':>4}" + "".join(f"  {'+'+str(d)+'d':>7}" for d in available)
+    logger.info(hdr)
+    logger.info("  " + "─" * (26 + len(available) * 9))
 
     for v in verdicts:
         subset = df[df["verdict"].str.contains(v, na=False)]
@@ -243,23 +227,13 @@ def _print_backtest_accuracy(df, scan_date):
             continue
         row = f"  {v:<20} {len(subset):>4}"
         for d in available:
-            col  = f"return_{d}d"
-            vals = subset[col].dropna()
-            if vals.empty:
-                row += f"  {'N/A':>7}"
-            else:
-                avg = vals.mean()
-                row += f"  {avg:>+6.1f}%"
+            vals = subset[f"return_{d}d"].dropna()
+            row += f"  {vals.mean():>+6.1f}%" if len(vals) else f"  {'N/A':>7}"
         logger.info(row)
 
-    logger.info("  " + "─" * (24 + len(available) * 9))
-
-    # % positive row
-    logger.info(f"\n  % of stocks with POSITIVE return:")
-    logger.info(f"  {'Verdict':<20} {'N':>4}" + "".join(
-        [f"  {'+'+str(d)+'d':>7}" for d in available]
-    ))
-    logger.info("  " + "─" * (24 + len(available) * 9))
+    logger.info("\n  % of stocks with POSITIVE return:")
+    logger.info(hdr)
+    logger.info("  " + "─" * (26 + len(available) * 9))
 
     for v in verdicts:
         subset = df[df["verdict"].str.contains(v, na=False)]
@@ -267,13 +241,8 @@ def _print_backtest_accuracy(df, scan_date):
             continue
         row = f"  {v:<20} {len(subset):>4}"
         for d in available:
-            col  = f"return_{d}d"
-            vals = subset[col].dropna()
-            if vals.empty:
-                row += f"  {'N/A':>7}"
-            else:
-                pct_pos = (vals > 0).mean() * 100
-                row += f"  {pct_pos:>6.1f}%"
+            vals = subset[f"return_{d}d"].dropna()
+            row += f"  {(vals > 0).mean()*100:>6.1f}%" if len(vals) else f"  {'N/A':>7}"
         logger.info(row)
 
     logger.info("═" * 90)
